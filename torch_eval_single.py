@@ -344,41 +344,58 @@ class ReverseLayerF(Function):
         return output, None
 
 class RevGrad(nn.Module):
-    def __init__(self, node=200, layer_nb=6, input_dim=1400, num_classes=256):
+    def __init__(self, classes=256, input_dim=700 ):
         super(RevGrad, self).__init__()
         act_func = nn.ReLU
         
-        layers = []
-        layers.append(nn.Linear(input_dim, node))
-        layers.append(nn.BatchNorm1d(node))
-        layers.append(nn.ReLU())
+        # Conv1D block (input: [batch_size, 1, 700])
+        self.conv1 = nn.Conv1d(in_channels=1, out_channels=4, kernel_size=1, padding='same')
+        self.bn1 = nn.BatchNorm1d(4)
+        self.pool1 = nn.AvgPool1d(kernel_size=2, stride=2)
 
-        for _ in range(layer_nb - 2):
-            layers.append(nn.Linear(node, node))
-            layers.append(nn.BatchNorm1d(node))
-            layers.append(nn.ReLU())
+        # Compute the output dimension after pooling
+        pooled_dim = input_dim // 2  # AveragePooling1D with stride=2 halves the dimension
+
+        # Fully connected layers
+        self.fc1 = nn.Linear(4 * pooled_dim, 10)
+        self.fc2 = nn.Linear(10, 10)
+        
 
         # source domain classifier block
         self.class_classifier = nn.Sequential()
-        self.class_classifier.add_module('c_fc1', nn.Linear(node, 128))
+        self.class_classifier.add_module('c_fc1', nn.Linear(10, 32))
         self.class_classifier.add_module('c_relu', act_func())
-        self.class_classifier.add_module('c_out', nn.Linear(128, 256))
+        self.class_classifier.add_module('c_out', nn.Linear(32, 256))
 
         # domain discriminator block
         self.domain_classifier = nn.Sequential()
-        self.domain_classifier.add_module('d_fc1', nn.Linear(node, 128))
+        self.domain_classifier.add_module('d_fc1', nn.Linear(10, 32))
         self.domain_classifier.add_module('d_relu1', act_func())
-        self.domain_classifier.add_module('d_fc2', nn.Linear(128, 256))
+        self.domain_classifier.add_module('d_fc2', nn.Linear(32, 256))
 
         # Weight initialization
         self.class_classifier.apply(init_weights_normal)
         self.domain_classifier.apply(init_weights_normal)
-        self.model = nn.Sequential(*layers)
 
-        self.fc = nn.Linear(node, num_classes)  # final layer
+        self.fc3 = nn.Linear(10, classes)  # final layer
+
 
     def forward(self, x, alpha):
-        x = self.model(x)
+        # x shape: [batch_size, 700] -> reshape for Conv1d
+        x = x.unsqueeze(1)  # [batch_size, 1, 700]
+
+        x = self.conv1(x)              # [batch_size, 4, 700]
+        x = F.selu(x)
+        x = self.bn1(x)                # [batch_size, 4, 700]
+        x = self.pool1(x)             # [batch_size, 4, 350]
+
+        x = x.view(x.size(0), -1)     # flatten to [batch_size, 4 * 350]
+
+        x = self.fc1(x)
+        x = F.selu(x)
+        x = self.fc2(x)
+        #x = F.selu(x)
+        #x = self.fc3(x)
         reverse_feature = ReverseLayerF.apply(x, alpha)
         class_output = self.class_classifier(x)
         domain_output = self.domain_classifier(reverse_feature)
@@ -507,8 +524,9 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 end_model_path = os.path.join(args.train_folder ,'model.pt')
 model = CNNBest(classes=256, input_dim=1500)
 if args.update_type == 'ada':
-    model = RevGrad()
+    model = RevGrad(classes=256, input_dim=1500)
     model.to(device)
+    end_model_path = os.path.join(args.train_folder ,'model_end.pt')
 model.load_state_dict(torch.load(end_model_path, weights_only=True))
 model.eval()
 input_data = X_attack[:args.num_trace, :]
@@ -554,4 +572,4 @@ plt.savefig(os.path.join(args.train_folder, 'test_mlp_16byte.png'))
 import pandas as pd
 df = pd.DataFrame({'Mean_ranks': y})
 
-df.to_csv(os.path.join(args.train_folder, 'all_rank.csv'), index=False)
+df.to_csv(os.path.join(args.train_folder, 'all_rank_{}_{}_{}_{}.csv'.format(args.num_trace, device_name, args.update_type, args.zmuv)))

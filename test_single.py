@@ -379,4 +379,4 @@ plt.savefig(os.path.join(args.train_folder, 'test_mlp_16byte.png'))
 import pandas as pd
 df = pd.DataFrame({'Mean_ranks': y})
 
-df.to_csv(os.path.join(args.train_folder, 'all_rank_{}.csv'.format(device_name)), index=False)
+df.to_csv(os.path.join(database_folder_train, 'all_rank_{}_{}_{}_{}_{}_{}.csv'.format(os.path.basename(args.train_model)[:-6], args.num_epoch, args.num_trace, args.num_sample, device_name, args.metric)))
