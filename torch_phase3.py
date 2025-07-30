@@ -428,31 +428,44 @@ class RevGrad(nn.Module):
 
         # source domain classifier block
         self.class_classifier = nn.Sequential()
-        self.class_classifier.add_module('c_fc1', nn.Linear(node, 32))
+        self.class_classifier.add_module('c_fc1', nn.Linear(10, 32))
         self.class_classifier.add_module('c_relu', act_func())
         self.class_classifier.add_module('c_out', nn.Linear(32, 256))
 
         # domain discriminator block
         self.domain_classifier = nn.Sequential()
-        self.domain_classifier.add_module('d_fc1', nn.Linear(node, 32))
+        self.domain_classifier.add_module('d_fc1', nn.Linear(10, 32))
         self.domain_classifier.add_module('d_relu1', act_func())
         self.domain_classifier.add_module('d_fc2', nn.Linear(32, 256))
 
         # Weight initialization
         self.class_classifier.apply(init_weights_normal)
         self.domain_classifier.apply(init_weights_normal)
-        self.model = nn.Sequential(*layers)
 
         self.fc3 = nn.Linear(10, classes)  # final layer
 
+
     def forward(self, x, alpha):
-        x = self.model(x)
+        # x shape: [batch_size, 700] -> reshape for Conv1d
+        x = x.unsqueeze(1)  # [batch_size, 1, 700]
+
+        x = self.conv1(x)              # [batch_size, 4, 700]
+        x = F.selu(x)
+        x = self.bn1(x)                # [batch_size, 4, 700]
+        x = self.pool1(x)             # [batch_size, 4, 350]
+
+        x = x.view(x.size(0), -1)     # flatten to [batch_size, 4 * 350]
+
+        x = self.fc1(x)
+        x = F.selu(x)
+        x = self.fc2(x)
+        #x = F.selu(x)
+        #x = self.fc3(x)
         reverse_feature = ReverseLayerF.apply(x, alpha)
         class_output = self.class_classifier(x)
         domain_output = self.domain_classifier(reverse_feature)
 
         return x, class_output, domain_output
-
 
 
 
