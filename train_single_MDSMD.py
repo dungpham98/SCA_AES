@@ -392,8 +392,6 @@ print(Y_attack[:100])
 
 #Check key by using metadatas
 #key = metadata[min_trace_idx + p]['key'][target_byte]
-print('Metadata inspect')
-print(Metadata_profiling.shape)
 #for i in range(100):
 #    print(Metadata_profiling[i]['key'][2])
 
