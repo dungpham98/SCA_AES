@@ -29,12 +29,13 @@ import argparse
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('--eval_interval', type=int, help='iteration_num', default=1)
+    parser.add_argument('--eval_path', type=int, help='iteration_num', default=1)
     parser.add_argument('--name', type=str, help='experiment name', default='test')
     parser.add_argument('--nruns', type=int, help='using varible key data', default=1)
     parser.add_argument('--num_trace', type=int, help='using varible key data', default=10)
     parser.add_argument('--num_epoch', type=int, help='using varible key data', default=10)
     parser.add_argument('--batch_size', type=int, help='using varible key data', default=10)
+    parser.add_argument('--eval_path', type=str)
 
     return parser 
 
@@ -375,8 +376,8 @@ multilabel=0
 simulated_key=0
 save_file=""
 
-fpath = 'ASCAD_variable.h5'
-(X_profiling, Y_profiling), (X_attack, Y_attack), (Metadata_profiling, Metadata_attack) = load_ascad(fpath, load_metadata=True)
+fpath = args.eval_path
+(X_profiling, Y_profiling), (X_attack, Y_attack) = load_ascad(fpath)
 
 print('X_profiling: ' , X_profiling.shape)
 print('Y_profiling: ' , Y_profiling.shape)
