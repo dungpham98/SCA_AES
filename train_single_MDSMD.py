@@ -113,7 +113,16 @@ def check_file_exists(file_path):
         sys.exit(-1)
     return
 
-def load_ascad(ascad_database_file, mask_type = 'MS1'):
+def load_sca_model(model_file):
+    check_file_exists(model_file)
+    try:
+        model = load_model(model_file)
+    except:
+        print("Error: can't load Keras model file '%s'" % model_file)
+        sys.exit(-1)
+    return model
+
+def load_ascad(ascad_database_file, load_metadata=False):
     check_file_exists(ascad_database_file)
     # Open the ASCAD database HDF5 for reading
     try:
@@ -121,18 +130,19 @@ def load_ascad(ascad_database_file, mask_type = 'MS1'):
     except:
         print("Error: can't open HDF5 file '%s' for reading (it might be malformed) ..." % ascad_database_file)
         sys.exit(-1)
-    device_name =  [key for key in in_file.keys()][0]
     # Load profiling traces
-    X_profiling = np.array(in_file['{}/{}/Profiling/Traces'.format(device_name, mask_type)], dtype=np.int8)
+    X_profiling = np.array(in_file['Profiling_traces/traces'], dtype=np.int8)
     # Load profiling labels
-    Y_profiling = np.array(in_file['{}/{}/Profiling/Labels'.format(device_name, mask_type)])
+    Y_profiling = np.array(in_file['Profiling_traces/labels'])
     # Load attacking traces
-    X_attack = np.array(in_file['{}/{}/Attack/Traces'.format(device_name, mask_type)], dtype=np.int8)
+    X_attack = np.array(in_file['Attack_traces/traces'], dtype=np.int8)
     # Load attacking labels
-    Y_attack = np.array(in_file['{}/{}/Attack/Labels'.format(device_name, mask_type)])
+    Y_attack = np.array(in_file['Attack_traces/labels'])
+    if load_metadata == False:
+        return (X_profiling, Y_profiling), (X_attack, Y_attack)
+    else:
+        return (X_profiling, Y_profiling), (X_attack, Y_attack), (in_file['Profiling_traces/metadata'], in_file['Attack_traces/metadata'])
 
-    return (X_profiling, Y_profiling), (X_attack, Y_attack)
-#Inspect the label distribution here
 
 ### CNN Best model
 def cnn_best(classes=256,input_dim=700,learning_rate=0.00001):
