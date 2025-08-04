@@ -29,7 +29,7 @@ import argparse
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('--eval_path', type=int, help='iteration_num', default=1)
+    parser.add_argument('--eval_num', type=int, help='iteration_num', default=1)
     parser.add_argument('--name', type=str, help='experiment name', default='test')
     parser.add_argument('--nruns', type=int, help='using varible key data', default=1)
     parser.add_argument('--num_trace', type=int, help='using varible key data', default=10)
