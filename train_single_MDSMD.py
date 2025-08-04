@@ -387,7 +387,7 @@ simulated_key=0
 save_file=""
 
 fpath = args.eval_path
-(X_profiling, Y_profiling), (X_attack, Y_attack) = load_ascad(fpath)
+(X_profiling, Y_profiling), (X_attack, Y_attack), (Metadata_profiling, Metadata_attack), device_name = load_ascad(fpath, load_metadata=True)
 
 print('X_profiling: ' , X_profiling.shape)
 print('Y_profiling: ' , Y_profiling.shape)
