@@ -1,3 +1,23 @@
+import os.path
+import sys
+import h5py
+import math
+import gc
+import time
+import numpy as np
+import tf_keras as keras
+from keras.optimizers import RMSprop
+from keras.callbacks import ModelCheckpoint, CSVLogger
+from keras.utils import to_categorical
+from keras.models import load_model
+from keras.models import Sequential
+from keras.layers import Dense, BatchNormalization
+from keras.optimizers import RMSprop
+import matplotlib.pyplot as plt
+import argparse
+from pathlib import Path
+from sklearn.cluster import KMeans
+
 import os
 import os.path
 import sys
@@ -6,22 +26,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 import ast
 import argparse
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-import random
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--eval_interval', type=int, help='iteration_num', default=1)
-    parser.add_argument('--num_trace', type=int, help='iteration_num', default=1)
-    parser.add_argument('--train_folder', type=str, help='experiment name', default='test')
-    parser.add_argument('--eval_path', type=str, help='experiment name', default='test')
-    parser.add_argument('--update_type', type=str, help='experiment name', default='none')
-    parser.add_argument('--zmuv', type=int, help='experiment name', default=0)
-    parser.add_argument('--nruns', type=int, help='experiment name', default=10)
+    parser.add_argument('--name', type=str, help='experiment name', default='test')
+    parser.add_argument('--nruns', type=int, help='using varible key data', default=1)
+    parser.add_argument('--num_trace', type=int, help='using varible key data', default=10)
+    parser.add_argument('--num_epoch', type=int, help='using varible key data', default=10)
+    parser.add_argument('--batch_size', type=int, help='using varible key data', default=10)
 
     return parser 
 
@@ -91,6 +104,7 @@ def multGF256(a,b):
         return alog_table[(log_table[a]+log_table[b]) %255]
 
 
+
 def check_file_exists(file_path):
     file_path = os.path.normpath(file_path)
     if os.path.exists(file_path) == False:
@@ -98,16 +112,7 @@ def check_file_exists(file_path):
         sys.exit(-1)
     return
 
-def load_sca_model(model_file):
-    check_file_exists(model_file)
-    try:
-        model = load_model(model_file)
-    except:
-        print("Error: can't load Keras model file '%s'" % model_file)
-        sys.exit(-1)
-    return model
-
-def load_ascad(ascad_database_file, load_metadata=False):
+def load_ascad(ascad_database_file, mask_type = 'MS1'):
     check_file_exists(ascad_database_file)
     # Open the ASCAD database HDF5 for reading
     try:
@@ -115,61 +120,85 @@ def load_ascad(ascad_database_file, load_metadata=False):
     except:
         print("Error: can't open HDF5 file '%s' for reading (it might be malformed) ..." % ascad_database_file)
         sys.exit(-1)
+    device_name =  [key for key in in_file.keys()][0]
     # Load profiling traces
-    X_profiling = np.array(in_file['Profiling_traces/traces'], dtype=np.int8)
+    X_profiling = np.array(in_file['{}/{}/Profiling/Traces'.format(device_name, mask_type)], dtype=np.int8)
     # Load profiling labels
-    Y_profiling = np.array(in_file['Profiling_traces/labels'])
+    Y_profiling = np.array(in_file['{}/{}/Profiling/Labels'.format(device_name, mask_type)])
     # Load attacking traces
-    X_attack = np.array(in_file['Attack_traces/traces'], dtype=np.int8)
+    X_attack = np.array(in_file['{}/{}/Attack/Traces'.format(device_name, mask_type)], dtype=np.int8)
     # Load attacking labels
-    Y_attack = np.array(in_file['Attack_traces/labels'])
-    if load_metadata == False:
-        return (X_profiling, Y_profiling), (X_attack, Y_attack)
-    else:
-        return (X_profiling, Y_profiling), (X_attack, Y_attack), (in_file['Profiling_traces/metadata'], in_file['Attack_traces/metadata'])
+    Y_attack = np.array(in_file['{}/{}/Attack/Labels'.format(device_name, mask_type)])
 
-
-
+    return (X_profiling, Y_profiling), (X_attack, Y_attack)
 #Inspect the label distribution here
 
+### CNN Best model
+def cnn_best(classes=256,input_dim=700,learning_rate=0.00001):
+    # Designing input layer
+    input_shape = (input_dim,1)
+    img_input = Input(shape=input_shape)
 
-# class to represent dataset
-class SCADataset():
-  
-    def __init__(self, data):
-        
-        self.x = data[0]
-        self.y = data[1]
-        self.n_samples = data[0].shape[0] 
-      
-    # support indexing such that dataset[i] can 
-    # be used to get i-th sample
-    def __getitem__(self, index):
-        return self.x[index], self.y[index]
-        
-    # we can call len(dataset) to return the size
-    def __len__(self):
-        return self.n_samples
+    # 1st convolutional block
+    x = Conv1D(4, 1, kernel_initializer='he_uniform', activation='selu', padding='same', name='block1_conv1')(img_input)
+    x = BatchNormalization()(x)
+    x = AveragePooling1D(2, strides=2, name='block1_pool')(x)
+    
+    x = Flatten(name='flatten')(x)
 
-class MLPBest(nn.Module):
-    def __init__(self, node=200, layer_nb=6, input_dim=1500, num_classes=256):
-        super(MLPBest, self).__init__()
-        
-        layers = []
-        layers.append(nn.Linear(input_dim, node))
-        layers.append(nn.BatchNorm1d(node))
-        layers.append(nn.ReLU())
+    # Classification layer
+    x = Dense(10, kernel_initializer='he_uniform', activation='selu', name='fc1')(x)
+    x = Dense(10, kernel_initializer='he_uniform', activation='selu', name='fc2')(x)
+    
+    # Logits layer              
+    x = Dense(classes, activation='softmax', name='predictions')(x)
 
-        for _ in range(layer_nb - 2):
-            layers.append(nn.Linear(node, node))
-            layers.append(nn.BatchNorm1d(node))
-            layers.append(nn.ReLU())
-
-        layers.append(nn.Linear(node, num_classes))  # final layer
-        self.model = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.model(x)
+    # Create model
+    inputs = img_input
+    model = Model(inputs, x, name='ascad')
+    optimizer = Adam(learning_rate=learning_rate)
+    model.compile(loss='categorical_crossentropy',optimizer=optimizer, metrics=['accuracy'])
+    return model
+'''
+def mlp_best(node=200,layer_nb=6,input_dim=1400):
+    model = Sequential()
+    model.add(Dense(node, input_dim=input_dim, activation='relu'))
+    #model.add(BatchNormalization(node))
+    model.add(BatchNormalization())
+    for i in range(layer_nb-2):
+            model.add(Dense(node, activation='relu'))
+            model.add(BatchNormalization())
+    model.add(Dense(256, activation='softmax'))
+    optimizer = RMSprop(learning_rate=0.00001)
+    model.compile(loss='categorical_crossentropy', optimizer=optimizer, metrics=['accuracy'])
+    return model
+'''
+from keras.models import Model
+def mlp_best(node=200, layer_nb=6, input_dim=1400):
+    inputs = keras.layers.Input(shape=(input_dim,))
+    
+    # First layer
+    x = keras.layers.Dense(node, activation='relu')(inputs)
+    x = keras.layers.BatchNormalization()(x)
+    
+    # Hidden layers
+    for _ in range(layer_nb - 2):
+        x = keras.layers.Dense(node, activation='relu')(x)
+        x = keras.layers.BatchNormalization()(x)
+    
+    # Output layer
+    outputs = keras.layers.Dense(256, activation='softmax')(x)
+    
+    model = keras.models.Model(inputs=inputs, outputs=outputs)
+    
+    optimizer = keras.optimizers.RMSprop(learning_rate=1e-5)
+    model.compile(
+        loss='categorical_crossentropy',
+        optimizer=optimizer,
+        metrics=['accuracy']
+    )
+    
+    return model
 
 def rank(predictions, metadata, real_key, min_trace_idx, max_trace_idx, last_key_bytes_proba, target_byte, simulated_key):
     # Compute the rank
@@ -244,7 +273,15 @@ def get_HW():
 
 
 HW = get_HW()
-
+import copy
+from tqdm import tqdm as tqdm
+def random_sampling(data, num_sample):
+    #print(len(data))
+    #print(data.shape)
+    rand_ids = np.random.choice(len(data), num_sample, replace=False)
+    print(len(rand_ids))
+    print('---')
+    return rand_ids
 
 def aes_internal(inp_data_byte, key_byte):
     inp_data_byte = int(inp_data_byte)
@@ -278,188 +315,6 @@ def get_labels(plain_text, key_byte, target_byte=2, leakage_model='ID'):
     labels = np.array(labels)
     return labels
 
-def load_ascad(ascad_database_file, mask_type='MS1' ,load_metadata=False):
-    check_file_exists(ascad_database_file)
-    # Open the ASCAD database HDF5 for reading
-    try:
-        in_file  = h5py.File(ascad_database_file, "r")
-    except:
-        print("Error: can't open HDF5 file '%s' for reading (it might be malformed) ..." % ascad_database_file)
-        sys.exit(-1)
-    device_name =  [key for key in in_file.keys()][0]
-    # Load profiling traces
-    X_profiling = np.array(in_file['{}/{}/Profiling/Traces'.format(device_name, mask_type)], dtype=np.int8)
-    # Load profiling labels
-    Y_profiling = np.array(in_file['{}/{}/Profiling/Labels'.format(device_name, mask_type)])
-    # Load attacking traces
-    X_attack = np.array(in_file['{}/{}/Attack/Traces'.format(device_name, mask_type)], dtype=np.int8)
-    # Load attacking labels
-    Y_attack = np.array(in_file['{}/{}/Attack/Labels'.format(device_name, mask_type)])
-    if load_metadata == False:
-        return (X_profiling, Y_profiling), (X_attack, Y_attack)
-    else:
-        Metadata_profiling = np.array(in_file['{}/{}/Profiling/MetaData'.format(device_name, mask_type)])
-        Metadata_attack = np.array(in_file['{}/{}/Attack/MetaData'.format(device_name, mask_type)])
-        return (X_profiling, Y_profiling), (X_attack, Y_attack), (Metadata_profiling, Metadata_attack), device_name
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.autograd import Function
-from torch.autograd import Variable
-import math
-import pdb
-
-
-pad_size = 5
-
-
-def init_weights_normal(m):
-    inition_func = torch.nn.init.xavier_normal
-    if isinstance(m, nn.Linear):
-        inition_func(m.weight)
-    if isinstance(m, nn.Conv1d):
-        inition_func(m.weight)
-
-
-def init_weights_uniform(m):
-    inition_func = torch.nn.init.xavier_uniform
-    if isinstance(m, nn.Linear):
-        inition_func(m.weight)
-        #m.bias.data.fill_(0.01)
-    if isinstance(m, nn.Conv1d):
-        inition_func(m.weight)
-        #m.bias.data.fill_(0.01)
-
-
-class ReverseLayerF(Function):
-    ''' Reverse layer functions '''
-    @staticmethod
-    def forward(ctx, x, alpha):
-        ctx.alpha = alpha
-        return x.view_as(x)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        output = grad_output.neg() * ctx.alpha
-        return output, None
-
-class RevGrad(nn.Module):
-    def __init__(self, classes=256, input_dim=700 ):
-        super(RevGrad, self).__init__()
-        act_func = nn.ReLU
-        
-        # Conv1D block (input: [batch_size, 1, 700])
-        self.conv1 = nn.Conv1d(in_channels=1, out_channels=4, kernel_size=1, padding='same')
-        self.bn1 = nn.BatchNorm1d(4)
-        self.pool1 = nn.AvgPool1d(kernel_size=2, stride=2)
-
-        # Compute the output dimension after pooling
-        pooled_dim = input_dim // 2  # AveragePooling1D with stride=2 halves the dimension
-
-        # Fully connected layers
-        self.fc1 = nn.Linear(4 * pooled_dim, 10)
-        self.fc2 = nn.Linear(10, 10)
-        
-
-        # source domain classifier block
-        self.class_classifier = nn.Sequential()
-        self.class_classifier.add_module('c_fc1', nn.Linear(10, 32))
-        self.class_classifier.add_module('c_relu', act_func())
-        self.class_classifier.add_module('c_out', nn.Linear(32, 256))
-
-        # domain discriminator block
-        self.domain_classifier = nn.Sequential()
-        self.domain_classifier.add_module('d_fc1', nn.Linear(10, 32))
-        self.domain_classifier.add_module('d_relu1', act_func())
-        self.domain_classifier.add_module('d_fc2', nn.Linear(32, 256))
-
-        # Weight initialization
-        self.class_classifier.apply(init_weights_normal)
-        self.domain_classifier.apply(init_weights_normal)
-
-        self.fc3 = nn.Linear(10, classes)  # final layer
-
-
-    def forward(self, x, alpha):
-        # x shape: [batch_size, 700] -> reshape for Conv1d
-        x = x.unsqueeze(1)  # [batch_size, 1, 700]
-
-        x = self.conv1(x)              # [batch_size, 4, 700]
-        x = F.selu(x)
-        x = self.bn1(x)                # [batch_size, 4, 700]
-        x = self.pool1(x)             # [batch_size, 4, 350]
-
-        x = x.view(x.size(0), -1)     # flatten to [batch_size, 4 * 350]
-
-        x = self.fc1(x)
-        x = F.selu(x)
-        x = self.fc2(x)
-        #x = F.selu(x)
-        #x = self.fc3(x)
-        reverse_feature = ReverseLayerF.apply(x, alpha)
-        class_output = self.class_classifier(x)
-        domain_output = self.domain_classifier(reverse_feature)
-
-        return x, class_output, domain_output
-
-class CNNBest(nn.Module):
-    def __init__(self, classes=256, input_dim=700):
-        super(CNNBest, self).__init__()
-        
-        # Conv1D block (input: [batch_size, 1, 700])
-        self.conv1 = nn.Conv1d(in_channels=1, out_channels=4, kernel_size=1, padding='same')
-        self.bn1 = nn.BatchNorm1d(4)
-        self.pool1 = nn.AvgPool1d(kernel_size=2, stride=2)
-
-        # Compute the output dimension after pooling
-        pooled_dim = input_dim // 2  # AveragePooling1D with stride=2 halves the dimension
-
-        # Fully connected layers
-        self.fc1 = nn.Linear(4 * pooled_dim, 10)
-        self.fc2 = nn.Linear(10, 10)
-        self.fc3 = nn.Linear(10, classes)
-
-    def forward(self, x):
-        # x shape: [batch_size, 700] -> reshape for Conv1d
-        x = x.unsqueeze(1)  # [batch_size, 1, 700]
-
-        x = self.conv1(x)              # [batch_size, 4, 700]
-        x = F.selu(x)
-        x = self.bn1(x)                # [batch_size, 4, 700]
-        x = self.pool1(x)             # [batch_size, 4, 350]
-
-        x = x.view(x.size(0), -1)     # flatten to [batch_size, 4 * 350]
-
-        x = self.fc1(x)
-        x = F.selu(x)
-        x = self.fc2(x)
-        x = F.selu(x)
-        x = self.fc3(x)
-        return x 
-
-def ZMUV(power_trace,power_trace_target,n):    
-    print('[LOG---- APPLYING ZMUVN.............]')
-    indx=min(len(power_trace), len(power_trace_target))
-    trainMean = np.mean(power_trace, axis = 0)
-    testMean = np.mean(power_trace_target, axis = 0)
-    print(np.shape(trainMean))
-    print(np.shape(testMean))
-    trainStd = np.std(power_trace, axis = 0)
-    testStd = np.std(power_trace_target, axis = 0)
-    print(np.shape(trainStd))
-    print(np.shape(testStd))
-    coeff=(trainStd/testStd)
-    modified_trace=[]
-    for i in range(n):
-        t=[]
-        for j in range(len(power_trace_target[i])):
-            t.append((((power_trace_target[i][j]-testMean[j])*coeff[j])+trainMean[j]))
-        modified_trace.append(t)
-    print('[LOG----ZMUVN COMPLETE.............]')
-
-    return modified_trace
 #Check target
 '''
 fpath = '/mnt/e/stm32_unmasked/stm32_unmasked/Target 1/S1_K1_150k_L11_2.npz'
@@ -478,17 +333,50 @@ print(len(labels))
 exit()
 '''
 
-import matplotlib.pyplot as plt
+def add_noise_gaussian(X_train, noise_portion, snr):
+    print('xxx')
+    print(X_train.shape)
+    print(int(len(X_train) * noise_portion))
+    random_ids = random_sampling(X_train, int(len(X_train) * noise_portion))
+    print(random_ids)
+    print(len(random_ids))
+    arranged_ids = np.sort(random_ids)
+    print(arranged_ids)
+    X_res = copy.deepcopy(X_train)
+    for i in tqdm(range(len(X_train))):
+        x = X_train[i]
+        ##print('X shape')
+        #print(x.shape)
+        #sp = np.mean( x**2 ) # Signal Power
+        #std_n = ( sp / snr )**0.5 # Noise std. deviation
+        #print(std_n)
+        #print(x.shape)
+        std_n = 1/snr
+        n = np.random.normal(0, std_n, x.shape[0])
+        #n = np.expand_dims(n, axis=1)
+        #print(n.shape)
+        #print(n[:10])
+        #print(x.shape)
+        #print(n.shape)
+        #print(np.sum(n))
+        xn = x + n * x
 
-#num_traces=2000
-num_traces=int(args.num_trace)
+        #print(xn.shape)
+        X_res[i] = np.array(xn)
+    print(X_res.shape)
+    return X_res
+
+import matplotlib.pyplot as plt
+import random
+
+num_traces=args.num_trace
 target_byte=2
 multilabel=0
 simulated_key=0
 save_file=""
 
-fpath = args.eval_path
-(X_profiling, Y_profiling), (X_attack, Y_attack), (Metadata_profiling, Metadata_attack), device_name = load_ascad(fpath, load_metadata=True)
+fpath = 'ASCAD_variable.h5'
+(X_profiling, Y_profiling), (X_attack, Y_attack), (Metadata_profiling, Metadata_attack) = load_ascad(fpath, load_metadata=True)
 
 print('X_profiling: ' , X_profiling.shape)
 print('Y_profiling: ' , Y_profiling.shape)
@@ -517,54 +405,70 @@ plt.ylabel('EM')
 plt.savefig('Test_Trace.png')
 plt.clf()
 '''
+xTrain_noise = add_noise_gaussian(X_profiling, noise_portion = 0.1, snr=100)
 
-all_x = []
-all_y = []
+save_path = '{}'.format(args.name)
+print(save_path)
+database_folder_train = os.path.join('multi_attack_trained_models', save_path)
+Path(database_folder_train).mkdir(parents=True, exist_ok=True)
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+#model_file = os.path.join(args.train_folder ,'model.keras')
+import tf_keras as keras
 
-end_model_path = os.path.join(args.train_folder ,'model.pt')
-model = CNNBest(classes=256, input_dim=1500)
-if args.update_type == 'ada':
-    model = RevGrad(classes=256, input_dim=1500)
-    model.to(device)
-    end_model_path = os.path.join(args.train_folder ,'model_end.pt')
-model.load_state_dict(torch.load(end_model_path, weights_only=True))
-model.eval()
-input_data = X_attack
-if args.zmuv == 1:
-    input_data = ZMUV(X_profiling, X_attack[:args.num_trace, :], args.num_trace)
-    input_data = np.array(input_data)
-print(input_data.shape)
+#xTrain_noise = add_noise_gaussian(xTrain, noise_portion=1.0, snr=100)
 
-input_data = torch.from_numpy(input_data).to(device).float()
-model = model.to(device)
+#yTrain  = keras.utils.to_categorical(yTrain , num_classes=NumSKPVclasses )
+model = mlp_best(input_dim=len(X_profiling[0]))
+model.summary()
 
+#Reshaped_X_profiling = np.expand_dims(X_profiling, axis = 2)
+Reshaped_X_profiling = X_profiling
+save_file_name = os.path.join(database_folder_train, 'model.keras')
+check_file_exists(os.path.dirname(save_file_name))
+# Save model calllback
+save_model = ModelCheckpoint(save_file_name)
+callbacks=[save_model]
+y=to_categorical(Y_profiling, num_classes=256)
 
+validation_split = 0
+print('Start training')
+history = model.fit(x=Reshaped_X_profiling, y=y, batch_size=args.batch_size, verbose = 1, validation_split=validation_split, epochs=args.num_epoch)
 
-if args.update_type == 'ada':
-    _, logits, _ = model(input_data, alpha=0)
-else:
-    logits = model(input_data)
-predictions = F.softmax(logits, dim=1).detach().cpu().numpy()
-print(predictions.shape)
+import tensorflow_model_optimization as tfmot
+import tf_keras as keras
+def apply_pruning_to_dense(layer):
+    if isinstance(layer, keras.layers.Dense):
+        return tfmot.sparsity.keras.prune_low_magnitude(layer)
+    return layer
 
-idx = 2
-target_byte = idx
+# Use `keras.models.clone_model` to apply `apply_pruning_to_dense` 
+# to the layers of the model.
+#model_for_pruning = keras.models.clone_model(
+#    model,
+#    clone_function=apply_pruning_to_dense,
+#)
+#Quick Ablation
+model_for_pruning = tfmot.sparsity.keras.prune_low_magnitude(model)
+
+model_for_pruning.summary()
+#Recovery Training
+recovery_epoch = 64
+
+#model.fit(xTrain_noise, yTrain, batch_size=arg,  epochs=recovery_epoch)
+history = model.fit(x=xTrain_noise, y=y, batch_size=args.batch_size, verbose = 1, validation_split=validation_split, epochs=recovery_epoch)
+
+#Evaluation
 nruns = int(args.nruns)
 random.seed(2025)
+#logits = model(X_profiling)
+#predictions = F.softmax(logits, dim=1).detach().cpu().numpy()
+predictions = model.predict(X_attack)
+print(predictions.shape)
+all_y = []
 # We test the rank over traces of the Attack dataset, with a step of 10 traces
-for i in range(args.nruns):
+for i in range(nruns):
     curr_index = random.sample(range(1, len(X_attack)), num_traces)
-    if args.zmuv == 1:
-        input_data = ZMUV(X_profiling, X_attack[curr_index], args.num_trace)
-        input_data = np.array(input_data)
-        input_data = torch.from_numpy(input_data).to(device).float()
-        logits = model(input_data)
-        predictions = F.softmax(logits, dim=1).detach().cpu().numpy()
-        ranks = full_ranks(predictions, X_attack[curr_index], Metadata_attack, 0, num_traces, 10, target_byte, simulated_key)
-    else:
-        ranks = full_ranks(predictions[curr_index], X_attack[curr_index], Metadata_attack, 0, num_traces, 10, target_byte, simulated_key)
+    ranks = full_ranks(predictions[curr_index], X_attack[curr_index], Metadata_attack, 0, num_traces, 10, target_byte, simulated_key)
     # We plot the results
     x = [ranks[i][0] for i in range(0, ranks.shape[0])]
     y = [ranks[i][1] for i in range(0, ranks.shape[0])]
@@ -574,26 +478,19 @@ for i in range(args.nruns):
     all_y.append(y)
 
 all_y = np.array(all_y)
+print(all_y.shape)
 y = np.mean(all_y, axis=0)
 y_median = np.median(all_y, axis=0)
+y_40 = np.median(all_y[:40], axis=0)
+y_10 = np.median(all_y[:10], axis=0)
 y_std = np.std(all_y, axis=0)
 print(y.shape)
 print('Mean y:')
 print(y)
 print('Median y:')
 print(y_median)
+print(y_40[-1])
+print(y_10[-1])
 print('Y_STD')
 print(y_std)
 exit()
-
-plt.plot(x,y, label='byte {}'.format(idx))
-
-plt.xlabel('# Traces')
-plt.ylabel('Timestep')
-plt.legend()
-plt.savefig(os.path.join(args.train_folder, 'test_mlp_16byte.png'))
-
-import pandas as pd
-df = pd.DataFrame({'Mean_ranks': y})
-
-df.to_csv(os.path.join(args.train_folder, 'all_rank_{}_{}_{}_{}.csv'.format(args.num_trace, device_name, args.update_type, args.zmuv)))

@@ -24,6 +24,7 @@ def parse_arguments():
     parser.add_argument('--train_folder', type=str, help='experiment name', default='test')
     parser.add_argument('--multikey', type=int, help='using varible key data', default=0)
     parser.add_argument('--eval_path', type=str, help='experiment name', default='test')
+    parser.add_argument('--nruns', type=int, help='experiment name', default=10)
 
     return parser 
 
@@ -344,7 +345,9 @@ plt.savefig('Test_Trace.png')
 plt.clf()
 '''
 all_ranks = {}
-
+all_median = []
+import random
+random.seed(2025)
 for ix in range(20):
     all_x = []
     all_y = []
@@ -352,34 +355,39 @@ for ix in range(20):
 
     model_file = os.path.join(args.train_folder ,'model{}.keras'.format(ix))
     model = load_sca_model(model_file)
-    input_data = X_attack[:num_traces, :]
+    input_data = X_attack
     predictions = model.predict(input_data)
     predictions_sbox_i = predictions
 
     idx = 2
     target_byte = idx
-
+    nruns = int(args.nruns)
+    
     # We test the rank over traces of the Attack dataset, with a step of 10 traces
-    ranks = full_ranks(predictions_sbox_i, X_attack, Metadata_attack, 0, num_traces, 10, target_byte, simulated_key)
-    # We plot the results
-    x = [ranks[i][0] for i in range(0, ranks.shape[0])]
-    y = [ranks[i][1] for i in range(0, ranks.shape[0])]
+    for i in range(args.nruns):
+        curr_index = random.sample(range(1, len(X_attack)), num_traces)
+        ranks = full_ranks(predictions[curr_index], X_attack[curr_index], Metadata_attack, 0, num_traces, 10, target_byte, simulated_key)
+        # We plot the results
+        x = [ranks[i][0] for i in range(0, ranks.shape[0])]
+        y = [ranks[i][1] for i in range(0, ranks.shape[0])]
+        print('---------------')
+        print(x)
+        print(y)
+        all_y.append(y)
 
-    print(x)
-    print(y)
-    all_x.append(x)
-    all_y.append(y)
-    all_ranks[ix] = y
-
-    '''
-    plt.plot(x,y, label='byte {}'.format(idx))
-
-    plt.xlabel('# Traces')
-    plt.ylabel('Timestep')
-    plt.legend()
-    plt.savefig(os.path.join(args.train_folder, 'test_mlp_16byte_{}.png'.format(ix)))
-    plt.clf()
-    '''
+    all_y = np.array(all_y)
+    y = np.mean(all_y, axis=0)
+    y_median = np.median(all_y, axis=0)
+    y_std = np.std(all_y, axis=0)
+    print(y.shape)
+    #print('Mean y:')
+    #print(y)
+    print('Median y:')
+    print(y_median)
+    #print('Y_STD')
+    #print(y_std)
+    all_median.append(y_median[-1])
+print(all_median)
 
 import pandas as pd
 df = pd.DataFrame(all_ranks)
